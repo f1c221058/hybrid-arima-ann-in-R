@@ -1,0 +1,247 @@
+---
+title: "Hybrid ARIMA-ANN Forecasting Tugas Akhir Hasil Pembahasaan"
+author: "Nama Anda"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(forecast)
+library(nnet)
+library(Metrics)
+library(ggplot2)
+library(forecast)
+library(neuralnet)
+library(ggplot2)
+library(lmtest)
+library(tseries)
+
+
+```
+```{r}
+# Membaca data dari file CSV
+data <- read.csv("main12.csv")
+
+# Menampilkan beberapa data pertama untuk memastikan formatnya
+head(data)
+
+
+
+```
+```{r}
+data_ts <- ts(data$`NTP.JAMBI`, start=c(2008,1), frequency=12)
+```
+```{r}
+
+```
+
+```{r}
+# 3. Persiapan data ANN
+autoplot(data_ts) + ggtitle("Nilai Tukar Petani Sumut Pangan")
+# Analisis deskriptif
+summary(data_ts)
+var(data_ts)
+# Memeriksa outlier
+boxplot(data_ts, main="Boxplot Nilai Tukar Petani")
+#Membagi data (80% training, 20% testing)
+n <- length(data_ts)
+n_train <- floor(0.8 * n)  # Pastikan jumlah train adalah bilangan bulat
+train <- window(data_ts, start=start(data_ts), end=c(2008 + (n_train-1)/12))
+test <- window(data_ts, start=c(2008 + n_train/12))
+```
+
+
+```{r}
+# 2. Identifikasi Model ARIMA
+# Uji kestasioneran menggunakan ADF Test
+adf.test(train)
+
+# Differencing jika tidak stasioner
+diff_train <- diff(train)
+adf.test(diff_train)
+```
+```{r}
+diff_train1 <- diff(diff_train)
+adf.test(diff_train1)
+# Plot ACF dan PACF untuk menentukan orde ARIMA
+par(mfrow=c(1,2))  # Menampilkan dua plot dalam satu baris
+acf(diff_train1, main="Autocorrelation Function (ACF)")  # Plot ACF
+pacf(diff_train1, main="Partial Autocorrelation Function (PACF)")  # Plot PACF
+par(mfrow=c(1,1))  # Kembalikan layout ke default
+
+
+```
+
+```
+```{r}
+# 3. Estimasi Parameter ARIMA
+model_arima <- arima(train, order=c(0, 1, 5))
+summary(model_arima)
+coeftest(model_arima)
+
+```
+```{r}
+# 4. Uji Diagnostik Model ARIMA
+checkresiduals(model_arima)
+
+
+```
+```{r}
+# 5. Menghitung Error ARIMA
+forecast_arima <- forecast(model_arima, h=length(test))
+fitted_values <- fitted(model_arima)
+error_arima <- train-fitted_values
+# Menghitung MSE
+mse <- mean((test - forecast_arima$mean)^2)
+
+# Menampilkan hasil MSE
+print(paste("MSE: ", mse))
+# Menghitung RMSE
+rmse <- sqrt(mse)
+
+# Menampilkan hasil RMSE
+print(paste("RMSE: ", rmse))
+# Menghitung MAPE
+mape <- mean(abs((test - forecast_arima$mean) / test)) * 100
+
+# Menampilkan hasil MAPE
+print(paste("MAPE: ", mape, "%"))
+
+
+```
+```{r}
+fitted_values <- fitted(model_arima)
+fitted_values
+error_arima
+```
+```{r}
+
+
+# plot data hasil dari data test dan prediksi 
+autoplot(test, series="Test", color="red") +
+  autolayer(forecast_arima$mean, series="Forecast", color="green") +
+  ggtitle("Hasil Forecasting ARIMA vs Data Test") +
+  xlab("Tahun") + ylab("NTP-SUMUT Pangan") +
+  theme_minimal()
+
+
+```
+```{r}
+# 6. Perancangan Model ANN
+# Normalisasi data residual
+normalize <- function(x) (x - min(x)) / (max(x) - min(x))
+norm_error <- normalize(error_arima)
+
+# Cegah error jika ada nilai kosong setelah differencing
+if (length(norm_error) > 1) {
+  data_ann <- data.frame(y=norm_error[-1], x=norm_error[-length(norm_error)])
+} else {
+  stop("Error: Data residual tidak cukup untuk ANN.")
+}
+
+
+```
+```{r}
+# Model ANN dengan satu hidden layer
+set.seed(123)
+model_ann <- neuralnet(y ~ x, data=data_ann, hidden=10, linear.output=TRUE)
+plot(model_ann)
+summary(model_ann)
+
+
+```
+```{r}
+# 7. Kombinasi Hasil ARIMA-ANN
+# Prediksi ANN
+if (nrow(data_ann) > 0) {
+  pred_ann <- compute(model_ann, as.matrix(data_ann$x))
+
+  # Denormalisasi hasil prediksi ANN
+  denorm <- function(x, minval, maxval) x * (maxval - minval) + minval
+  pred_ann_denorm <- denorm(pred_ann$net.result, min(error_arima), max(error_arima))
+
+  # Pastikan panjang prediksi ANN sesuai dengan panjang forecast ARIMA
+  if (length(pred_ann_denorm) != length(fitted_values)) {
+    pred_ann_denorm <- head(pred_ann_denorm, length(fitted_values))
+  }
+}
+
+# Perbaikan prediksi arima karena panjang datanya itu berbeda dikarenakan panjang data hasil prediski berbeda dengan panjang data test yang digunakan 
+pred_ann_fixed <- c(pred_ann_denorm, pred_ann_denorm[length(pred_ann_denorm)])
+final_pred <- fitted_values + pred_ann_fixed
+
+```
+```{r}
+# Evaluasi model hybrid
+  rmse <- sqrt(mean((test - final_pred)^2))
+  mae <- mean(abs(test - final_pred))
+  mape <- mean(abs((test - final_pred)/test)) * 100
+
+  cat("RMSE:", rmse, "\nMAE:", mae, "\nMAPE:", mape, "%\n")
+
+```
+```{r}
+# Visualisasi hasil peramalan
+  autoplot(test, series="Actual") +
+    autolayer(forecast_arima$mean, series="ARIMA",color="red") +
+    autolayer(final_pred, series="Hybrid ARIMA-ANN",color = "blue") +
+    ggtitle("Perbandingan Model") +
+    theme_minimal()
+
+#ggsave("~/perbandingan_model.png", plot = plot_forecast, width = 8, height = 6, dpi = 300)
+```
+```{r}
+# 1. Fit model ARIMA
+model_arima <- arima(test, order = c(10, 1, 1))
+forecast_arima <- forecast(model_arima, h = 12)
+
+# 2. Hitung residual dari ARIMA di data training
+residuals_arima <- residuals(model_arima)
+
+# 3. Siapkan data input ANN
+# Input: lagged residuals, Output: residual saat ini
+lag1 <- stats::lag(residuals_arima, k = -1)
+lag2 <- stats::lag(residuals_arima, k = -2)
+lag3 <- stats::lag(residuals_arima, k = -3)
+
+# Gabungkan sebagai data frame
+df_ann <- data.frame(
+  y = residuals_arima[4:length(residuals_arima)],
+  x1 = lag1[4:length(residuals_arima)],
+  x2 = lag2[4:length(residuals_arima)],
+  x3 = lag3[4:length(residuals_arima)]
+)
+
+# 4. Fit ANN
+set.seed(123)
+model_ann <- neuralnet(y ~ x1 + x2 + x3, data = df_ann, hidden = c(5), linear.output = TRUE)
+
+# 5. Prediksi residual ARIMA (nonlinear) untuk 12 bulan ke depan
+# Buat input ANN dari residual ARIMA terakhir
+last_res <- tail(residuals_arima, 3)
+ann_forecast <- c()
+
+for (i in 1:12) {
+  new_input <- data.frame(x1 = last_res[3], x2 = last_res[2], x3 = last_res[1])
+  pred <- compute(model_ann, new_input)$net.result
+  ann_forecast <- c(ann_forecast, pred)
+  # geser residual
+  last_res <- c(pred, last_res[1:2])
+}
+
+# 6. Gabungkan ARIMA + ANN
+hybrid_forecast <- forecast_arima$mean + ann_forecast
+
+# 7. Visualisasi hasil hybrid
+ts_hybrid <- ts(hybrid_forecast, start = end(test) + c(0, 1), frequency = 12)
+
+autoplot(ts_hybrid) +
+  ggtitle("Hybrid Forecast 12 Bulan ke Depan (ARIMA + ANN)") +
+  xlab("Tahun") + ylab("Prediksi NTP Pangan")
+
+# 8. Tampilkan nilai prediksi
+print(ts_hybrid)
+
+
+
+```
